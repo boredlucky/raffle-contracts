@@ -374,6 +374,7 @@ describe("Raffle", function () {
             expect(await raffle.getState()).to.be.equal(RAFFLE_STATES.WaitingForNFT);
             await raffle.cancelBeforeStart();
             expect(await raffle.getState()).to.be.equal(RAFFLE_STATES.Cancelled);
+            expect(await raffle.getCancelTimestamp()).to.be.gt(0);
         });
 
         it("Canceling in WaitingForStart state", async function () {
@@ -381,6 +382,7 @@ describe("Raffle", function () {
 
             await raffle.cancelBeforeStart();
             expect(await raffle.getState()).to.be.equal(RAFFLE_STATES.Cancelled);
+            expect(await raffle.getCancelTimestamp()).to.be.gt(0);
         });
 
         it("Non-owner cannot cancel raffle in WaitingForStart state", async function () {
@@ -433,7 +435,7 @@ describe("Raffle", function () {
             await time.increaseTo(endTimestamp);
             expect(await raffle.getState()).to.be.equal(RAFFLE_STATES.SellingTickets);
             await expect(raffle.purchaseTicket(1, {value: 1})).to.be.revertedWith(
-                "End timestamp must be in the past"
+                "End timestamp must be in the future"
             );
             expect(await raffle.getState()).to.be.equal(RAFFLE_STATES.SellingTickets);
         });
@@ -454,7 +456,7 @@ describe("Raffle", function () {
             await time.increaseTo(endTimestamp);
             expect(await raffle.getState()).to.be.equal(RAFFLE_STATES.SellingTickets);
             await expect(raffle.giveawayTicket([{receiverAddress: owner.address, count: 1}])).to.be.revertedWith(
-                "End timestamp must be in the past"
+                "End timestamp must be in the future"
             );
             expect(await raffle.getState()).to.be.equal(RAFFLE_STATES.SellingTickets);
         });
@@ -542,6 +544,27 @@ describe("Raffle", function () {
     });
 
     describe("Canceling raffle after start", function () {
+
+        it("Canceling in WaitingForStart state using cancelBeforeStart() (after endTimestamp)", async function () {
+            const {raffle} = await erc721RaffleInWaitingForStartStateFixture();
+
+            const endTimestamp = await raffle.endTimestamp();
+            await time.increaseTo(endTimestamp.add(1000));
+            await raffle.cancelBeforeStart();
+            expect(await raffle.getState()).to.be.equal(RAFFLE_STATES.Cancelled);
+            expect(await raffle.getCancelTimestamp()).to.be.gt(0);
+        });
+
+        it("Canceling in WaitingForStart state using cancelIfUnsold()", async function () {
+            const {raffle} = await erc721RaffleInWaitingForStartStateFixture();
+
+            const endTimestamp = await raffle.endTimestamp();
+            await time.increaseTo(endTimestamp.add(1000));
+            await raffle.cancelIfUnsold();
+            expect(await raffle.getState()).to.be.equal(RAFFLE_STATES.Cancelled);
+            expect(await raffle.getCancelTimestamp()).to.be.gt(0);
+        });
+
         it("Raffle cannot be cancelled in SellingTickets state", async function () {
             const {raffle} = await raffleInSellingTicketsStateFixture();
 
@@ -592,6 +615,7 @@ describe("Raffle", function () {
             await time.increaseTo(endTimestamp);
             await expect(raffle.cancelIfUnsold()).not.to.be.reverted;
             expect(await raffle.getState()).to.be.equal(RAFFLE_STATES.Cancelled);
+            expect(await raffle.getCancelTimestamp()).to.be.gt(0);
 
             await expect(raffle.transferTicketRefundIfCancelled()).to.changeEtherBalance(raffle, -ticketValue);
             await expect(raffle.withdrawPayments(owner.address)).to.changeEtherBalance(owner, ticketValue);
@@ -688,6 +712,7 @@ describe("Raffle", function () {
             await time.increase(12 * 60 * 60);
             await expect(raffle.cancelIfNoRNG()).not.to.be.reverted;
             expect(await raffle.getState()).to.be.equal(RAFFLE_STATES.Cancelled);
+            expect(await raffle.getCancelTimestamp()).to.be.gt(0);
         });
     });
 
@@ -744,33 +769,39 @@ describe("Raffle", function () {
             it("Using transferNFTToWinnerIfCompleted (CryptoPunk)", async function () {
                 const {owner, cryptoPunksMarket, raffle} = await cryptoPunkRaffleInCompletedStateFixture();
 
+                expect(await raffle.getTransferNFTToWinnerTimestamp()).to.be.equal(0);
                 expect(Number(await cryptoPunksMarket.balanceOf(owner.address))).to.equal(0);
                 await raffle.transferNFTToWinnerIfCompleted();
                 expect(Number(await cryptoPunksMarket.balanceOf(owner.address))).to.equal(1);
                 expect(await raffle.getState()).to.be.equal(RAFFLE_STATES.Completed);
+                expect(await raffle.getTransferNFTToWinnerTimestamp()).to.be.gt(0);
             });
 
             it("Using transferNFTToWinnerIfCompleted (ERC721)", async function () {
                 const {erc721Mock, raffle} = await erc721RaffleInCompletedStateFixture();
 
+                expect(await raffle.getTransferNFTToWinnerTimestamp()).to.be.equal(0);
                 await expect(raffle.transferNFTToWinnerIfCompleted()).to.emit(erc721Mock, "Transfer");
                 expect(await raffle.getState()).to.be.equal(RAFFLE_STATES.Completed);
+                expect(await raffle.getTransferNFTToWinnerTimestamp()).to.be.gt(0);
             });
 
             it("Using transferNFTToWinnerIfCompleted (ERC1155)", async function () {
                 const {erc1155Mock, raffle} = await erc1155RaffleInCompletedStateFixture();
 
+                expect(await raffle.getTransferNFTToWinnerTimestamp()).to.be.equal(0);
                 await expect(raffle.transferNFTToWinnerIfCompleted()).to.emit(erc1155Mock, "TransferSingle");
                 expect(await raffle.getState()).to.be.equal(RAFFLE_STATES.Completed);
+                expect(await raffle.getTransferNFTToWinnerTimestamp()).to.be.gt(0);
             });
         });
     });
 
     describe("Getters", function () {
-        it("isWinnerDrawn(), getWinnerAddress(), getWinnerTicketNumber(), getWinnerDrawTimestamp()", async function () {
+        it("getWinnerAddress(), getWinnerTicketNumber(), getWinnerDrawTimestamp()", async function () {
             const {owner, raffle, vrfCoordinatorV2Mock} = await raffleInWaitingForRNGStateFixture();
 
-            expect(await raffle.isWinnerDrawn()).to.be.equal(false);
+            expect(await raffle.getState()).to.be.equal(RAFFLE_STATES.WaitingForRNG);
             expect(await raffle.getWinnerAddress()).to.be.equal("0x0000000000000000000000000000000000000000");
             expect(await raffle.getWinnerTicketNumber()).to.be.equal(0);
             expect(await raffle.getWinnerDrawTimestamp()).to.be.equal(0);
@@ -781,7 +812,7 @@ describe("Raffle", function () {
                 "WinnerDrawn"
             );
 
-            expect(await raffle.isWinnerDrawn()).to.be.equal(true);
+            expect(await raffle.getState()).to.be.equal(RAFFLE_STATES.Completed);
             expect(await raffle.getWinnerAddress()).to.be.equal(owner.address);
             expect(await raffle.getWinnerTicketNumber()).to.be.lt(DEFAULT_TICKETS);
             expect(await raffle.getWinnerDrawTimestamp()).to.be.gt(0);

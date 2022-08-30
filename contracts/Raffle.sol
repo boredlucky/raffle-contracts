@@ -76,7 +76,9 @@ contract Raffle is Ownable, TicketStorage, ERC1155Holder, ERC721Holder, PullPaym
     uint16 private _giveawayTickets;
     mapping(address => uint16) private _addressToPurchasedCountMap;
 
-    bool private _winnerDrawn;
+    uint256 private _cancelTimestamp;
+    uint256 private _transferNFTToWinnerTimestamp;
+
     uint256 private _winnerDrawTimestamp;
     uint16 private _winnerTicketNumber;
     address private _winnerAddress;
@@ -142,7 +144,7 @@ contract Raffle is Ownable, TicketStorage, ERC1155Holder, ERC721Holder, PullPaym
             }
         }
         require(_state == State.SellingTickets, "Must be in SellingTickets");
-        require(block.timestamp < endTimestamp, "End timestamp must be in the past");
+        require(block.timestamp < endTimestamp, "End timestamp must be in the future");
         require(count > 0, "Ticket count must be more than 0");
         require(msg.value == ticketPrice * count, "Incorrect purchase amount (must be ticketPrice * count)");
 
@@ -186,7 +188,7 @@ contract Raffle is Ownable, TicketStorage, ERC1155Holder, ERC721Holder, PullPaym
                 _state = State.SellingTickets;
             }
         }
-        require(block.timestamp < endTimestamp, "End timestamp must be in the past");
+        require(block.timestamp < endTimestamp, "End timestamp must be in the future");
 
         for (uint256 i = 0; i < receivers.length; i++) {
             AddressAndCount memory item = receivers[i];
@@ -244,6 +246,7 @@ contract Raffle is Ownable, TicketStorage, ERC1155Holder, ERC721Holder, PullPaym
         );
 
         _state = State.Cancelled;
+        _cancelTimestamp = block.timestamp;
     }
 
     /**
@@ -255,10 +258,14 @@ contract Raffle is Ownable, TicketStorage, ERC1155Holder, ERC721Holder, PullPaym
      * - must be in SellingTickets state
      */
     function cancelIfUnsold() external {
-        require(_state == State.SellingTickets, "Must be in SellingTickets");
+        require(
+            _state == State.WaitingForStart || _state == State.SellingTickets,
+            "Must be in WaitingForStart or SellingTickets"
+        );
         require(block.timestamp > endTimestamp, "End timestamp must be in the past");
 
         _state = State.Cancelled;
+        _cancelTimestamp = block.timestamp;
     }
 
     /**
@@ -274,6 +281,7 @@ contract Raffle is Ownable, TicketStorage, ERC1155Holder, ERC721Holder, PullPaym
         require(block.timestamp > endTimestamp + 1 days, "End timestamp + 1 day must be in the past");
 
         _state = State.Cancelled;
+        _cancelTimestamp = block.timestamp;
     }
 
     /**
@@ -324,6 +332,7 @@ contract Raffle is Ownable, TicketStorage, ERC1155Holder, ERC721Holder, PullPaym
         require(_state == State.Completed, "Must be in Completed");
         assert(_winnerAddress != address(0));
 
+        _transferNFTToWinnerTimestamp = block.timestamp;
         if (nftStandard == NFTStandard.CryptoPunks) {
             ICryptoPunk(nftContract).transferPunk(_winnerAddress, nftTokenId);
         }
@@ -355,17 +364,21 @@ contract Raffle is Ownable, TicketStorage, ERC1155Holder, ERC721Holder, PullPaym
         return _addressToPurchasedCountMap[owner];
     }
 
+    /**
+    * @dev Returns raffle state.
+     *
+     * If `Completed`, it is possible to use {getWinnerAddress}, {getWinnerDrawTimestamp} and {getWinnerTicketNumber}.
+     */
     function getState() public view returns (State) {
         return _state;
     }
 
-    /**
-     * @dev Returns `true` if raffle winner is known.
-     *
-     * If `true`, it is possible to use {getWinnerAddress}, {getWinnerDrawTimestamp} and {getWinnerTicketNumber}.
-     */
-    function isWinnerDrawn() public view returns (bool) {
-        return _winnerDrawn;
+    function getCancelTimestamp() public view returns (uint256) {
+        return _cancelTimestamp;
+    }
+
+    function getTransferNFTToWinnerTimestamp() public view returns (uint256) {
+        return _transferNFTToWinnerTimestamp;
     }
 
     function getWinnerAddress() public view returns (address) {
@@ -384,7 +397,7 @@ contract Raffle is Ownable, TicketStorage, ERC1155Holder, ERC721Holder, PullPaym
      * @dev Chainlink VRF callback function.
      *
      * Returned `randomWords` are stored in `vrfRandomWords`, we determine winner and store all relevant information in
-     * `_winnerTicketNumber`, `_winnerDrawn`, `_winnerDrawTimestamp` and `_winnerAddress`.
+     * `_winnerTicketNumber`, `_winnerDrawTimestamp` and `_winnerAddress`.
      *
      * Requirements:
      * - must have correct `requestId`
@@ -398,7 +411,6 @@ contract Raffle is Ownable, TicketStorage, ERC1155Holder, ERC721Holder, PullPaym
 
         vrfRandomWords = randomWords;
         _winnerTicketNumber = uint16(randomWords[0] % _tickets);
-        _winnerDrawn = true;
         _winnerDrawTimestamp = block.timestamp;
         _winnerAddress = findOwnerOfTicketNumber(_winnerTicketNumber);
         _state = State.Completed;
